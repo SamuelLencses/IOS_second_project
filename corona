@@ -1,0 +1,386 @@
+#!/bin/bash
+#  Samuel Lencses
+#  First IOS project
+#  2022
+
+export POSIXLY_CORRECT=yes
+export LC_ALL=C
+
+echoerr() { printf "%s\n" "$*" >&2;} #puts string to stderr
+head="id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs"
+print_help () {
+
+	echo "USAGE: corona [FILTERS] [COMMAND] [LOG] "
+	echo "       corona [-h] "
+	echo " "
+	echo " -h -> display this help and exit"
+	echo ""
+	echo "FILTERS"
+	echo "			-a DATETIME  -- filter all records to only records after the date (that day including-)."
+	echo "							DATETIME is in format YYYY-MM-DD."
+	echo ""
+	echo "			-b DATETIME  -- filter all records to only records BEFORE the date (that day including-)."
+	echo "							DATETIME is in format YYYY-MM-DD."
+	echo ""
+	echo "			-g GENDER    -- filter all infected records based on the given GENDER value -> M for male, Z for female."
+	echo ""
+	echo "			-s 	     -- in commands gender, age, daily, monthly, yearly, countries, districts and regions prints data graphically through histograms."
+	echo ""
+	echo "COMMANDS"
+	echo ""
+	echo "			infected 	- counts number of infected people"
+	echo ""
+	echo "			merge 		- merges multiple files into one with same order (heading will be just one on the output)"
+	echo ""
+	echo "			gender 		- prints number of infected for each gender"
+	echo ""
+	echo "			age 		- prints table of infected people by intervals"
+	echo ""
+	echo "			daily		- prints statistics of infected for each day"
+	echo ""
+	echo "			monthly		- prints statistics of infected for each month"
+	echo ""
+	echo "			yearly		- prints statistics of infected for each year"
+	echo ""
+	echo "			countries	- prints statistics of infected for each country except Czech"
+	echo ""
+	echo "			districts	- prints statistics of infected for each district"
+	echo ""
+	echo "			regions		- prints statistics of infected for each region"
+	echo ""
+	echo "This script is also able to read from files .csv .gz .bz2"
+	echo "If you run this script without any filters or commands, it will print the file on the standart output"
+	echo "If script won't get any files as arguments, it will expect records on standart input"
+	exit 0
+}
+#removes bad dates
+validate_logs(){
+
+  VALIDATED=$(echo "$LOGS" | awk -F ',' -vYEAR="" -vMONTH="" -vDAY="" {'YEAR=substr($2, 1, 4); MONTH=substr($2, 6, 2); DAY=substr($2, 9, 2); \
+ 									 if (NF < 3) {} \
+ 									 
+ 									 else if (length($2) != 10) {echoerr "Invalid date: " $0 } \
+ 									 else if ($3 < 0) {echoerr "Invalid age: $0"}\
+ 									 else if ($3%1 != 0 ) {echoerr "Invalid age: $0"}\
+                                     else if ($3 == "vek") {} \
+                                     else if (DAY > 31) {echoerr "Invalid date: " $0 }  \
+                                     else if (MONTH > 12) {echoerr "Invalid date: " $0 }  \
+                                     else if (DAY > 31 && (MONTH == "01" || MONTH == "03" || MONTH == "05" || MONTH == "07" || MONTH == "08" || MONTH == "10" || MONTH == "12")) \
+                                                {echoerr "Invalid date: " $0 } \
+                                     else if (DAY > 30 && (MONTH == "04" || MONTH == "06" || MONTH == "09" || MONTH == "11")) \
+                                                {echoerr "Invalid date: " $0 } \
+                                     else if (DAY > 29 && (MONTH == "02")) \
+                                                {echoerr "Invalid date: " $0 } \
+
+                                     else if (($2 < 9999-99-99) && ($2 > 0000-00-00)) {print $0}'})
+}
+
+##################
+#filter_functions#
+##################
+
+#4th argument dependence
+gender_case_man(){
+	VALIDATED=$(echo "$VALIDATED" | awk -F, '$4 == "M"')
+}
+
+gender_case_woman(){
+	VALIDATED=$(echo "$VALIDATED" | awk -F, '$4 == "Z"')
+}
+#compares dates
+after_date(){
+	IFS='-' read -a DATETIME <<< "$AFTER_DATETIME"
+	SET_DAY=${DATETIME[2]}
+	SET_MONTH=${DATETIME[1]}
+	SET_YEAR=${DATETIME[0]}
+	VALIDATED=$(echo "$VALIDATED" | awk -F ',' -vYEAR="" -vMONTH="" -vDAY="" -vSET_DAY="$SET_DAY" -vSET_YEAR="$SET_YEAR" -vSET_MONTH="$SET_MONTH" {'YEAR=substr($2, 1, 4); MONTH=substr($2, 6, 2); DAY=substr($2, 9, 2); \
+											if (YEAR > SET_YEAR) {print $0}\
+											else if((YEAR == SET_YEAR) && (MONTH > SET_MONTH)) {print $0}\
+											else if((YEAR == SET_YEAR) && (MONTH >= SET_MONTH) && (DAY >= SET_DAY)){print $0}\
+											else {}'})
+}
+
+before_date(){
+	IFS='-' read -a DATETIME <<< "$BEFORE_DATETIME"
+	SET_DAY=${DATETIME[2]}
+	SET_MONTH=${DATETIME[1]}
+	SET_YEAR=${DATETIME[0]}
+	VALIDATED=$(echo "$VALIDATED" | awk -F ',' -vYEAR="" -vMONTH="" -vDAY="" -vSET_DAY="$SET_DAY" -vSET_YEAR="$SET_YEAR" -vSET_MONTH="$SET_MONTH" {'YEAR=substr($2, 1, 4); MONTH=substr($2, 6, 2); DAY=substr($2, 9, 2); \
+											if (YEAR < SET_YEAR) {print $0}\
+											else if((YEAR == SET_YEAR) && (MONTH < SET_MONTH)) {print $0}\
+											else if((YEAR == SET_YEAR) && (MONTH <= SET_MONTH) && (DAY <= SET_DAY)){print $0}\
+											else {}'})
+}
+#todo 
+graphs(){
+	case $1 in #command check
+		gender)
+			;;
+		age)
+			;;
+		daily)
+			;;
+		monthly)
+			;;
+		yearly)
+			;;
+		countries)
+			;;
+		districts)
+			;;
+		regions)
+			;;
+		*) echoerr "wrong graph argument";;
+	esac
+}
+
+###################
+#command functions#
+###################
+#number of lines without head
+infected(){
+	echo "$VALIDATED" | wc -l
+}
+#accidentally implemented
+merge(){
+	$VALIDATED=$VALIDATED
+}
+
+gender(){
+
+	FEMALES=$(echo "$VALIDATED" | awk -F, -vFCOUNTER="0"  {'if ($4 == "Z"){FCOUNTER++}} END {print FCOUNTER}')
+
+	MALES=$(echo "$VALIDATED" | awk -F, -vMCOUNTER="0" {'if ($4 == "M"){MCOUNTER++}} END {print MCOUNTER}')
+	NONE=$(echo "$VALIDATED" | awk -F, -vNCOUNTER="0" '$4 == ""')
+	
+	echo "M: $MALES"
+	echo "Z: $FEMALES"
+	if [ "$NONE" = "0" ]; then
+		echo "None: $NONE"
+	fi
+
+}
+
+
+#age function
+age(){
+	VALIDATED=$(echo "$VALIDATED" | awk -F ',' -vNone="0" -vZF="0" -vSF="0" -vSTF="0" -vTXF="0" -vTXFF="0" -vFFFF="0" -vFXXF="0" -vXXSF="0" -vSXEF="0" -vEXNF="0" -vNSHF="0" -vHSplus="0" {'\
+											if ($3 < 6) {ZF++} \
+											else if (($3 > 6) && ($3 < 15)) {SF++} \
+											else if (($3 > 15) && ($3 < 26)) {STF++} \
+											else if (($3 > 25) && ($3 < 36)) {TXF++} \
+											else if (($3 > 35) && ($3 < 46)) {TXFF++} \
+											else if (($3 > 45) && ($3 < 56)) {FFFF++} \
+											else if (($3 > 55) && ($3 < 66)) {FXXF++} \
+											else if (($3 > 65) && ($3 < 76)) {XXSF++} \
+											else if (($3 > 75) && ($3 < 86)) {SXEF++} \
+											else if (($3 > 85) && ($3 < 96)) {EXNF++} \
+											else if (($3 > 95) && ($3 < 106)) {NSHF++} \
+											else if ($3 > 105) {HSplus++} \
+											else if ($3 ==""){None++}}
+											END{
+
+											printf "0-5   : %d\n",ZF; \
+											printf "6-15  : %d\n",SF; \
+											printf "16-25 : %d\n",STF; \
+											printf "26-35 : %d\n",TXF; \
+											printf "36-45 : %d\n",TXFF; \
+											printf "46-55 : %d\n",FFFF; \
+											printf "56-65 : %d\n",FXXF; \
+											printf "66-75 : %d\n",XXSF; \
+											printf "76-85 : %d\n",SXEF; \
+											printf "86-95 : %d\n",EXNF; \
+											printf "96-105: %d\n",NSHF; \
+											printf ">105  : %d\n",HSplus; \
+
+											if (None > 0) {printf "None  : %d\n",None;}}')
+	echo "$VALIDATED"
+}
+#sets date, if same( count ++), if different -> newcounter # sorted ## very universal function
+daily(){
+	VALIDATED=$(echo "$VALIDATED" | sort -t ',' -k 2,2 | awk -F ','  -vThisdate="0" -vPreviousdate="0" -vCounter="0" -vAVarCounter="0" \
+				'{	if (NR <=1 ) {Thisdate=$2} \
+					else {Previousdate=Thisdate; Thisdate=$2; Counter++; \
+						if (Previousdate != Thisdate) {if (Previousdate == "") \
+														{AVArCounter=Counter; Counter=0}\
+														else{printf "%s: %d\n", Previousdate,Counter;Counter=0}}}}\
+					END {printf "%s: %d\n", Thisdate,Counter+1;\
+						if (AVArCounter != 0){printf "None: %d\n", AVArCounter}}') 
+	echo "$VALIDATED"
+}
+#needed to change from all days to only months substring -> looking at only month digits from date YYYY-MM-DD
+monthly(){
+	VALIDATED=$(echo "$VALIDATED" | sort -t ',' -k 2,2 | awk -F ','  -vCounter="0" -vPreviousdate="0" -vAVarCounter="0" \
+				'{Thisdate=substr($2, 0, 7);\
+					if (NR <=1 ) {Thisdate=substr($2, 0, 7)} \
+					else {Previousdate=Thisdate; Thisdate=substr($2, 0, 7); Counter++; \
+						if (Previousdate != Thisdate) {if (Previousdate == "") \
+														{AVArCounter=Counter; Counter=0}\
+														else{printf "%s: %d\n", Previousdate,Counter;Counter=0}}}}\
+					END {printf "%s: %d\n", Thisdate,Counter+1;\
+						if (AVArCounter != 0){printf "None: %d\n", AVArCounter}}') 
+	echo "$VALIDATED"
+}
+#needed to change from all days to only years substring -> looking at only at first 4 digits from date
+yearly(){
+	VALIDATED=$(echo "$VALIDATED" | sort -t ',' -k 2,2 | awk -F ','  -vCounter="0" -vPreviousdate="0" -vAVarCounter="0" '{\
+					Thisdate=substr($2,0,4); \
+					if (NR <=1 ) {Thisdate=substr($2,0,4);} \
+					else {Previousdate=Thisdate; Thisdate=substr($2,0,4);; Counter++; \
+						if (Previousdate != Thisdate) {if (Previousdate == "") \
+														{AVArCounter=Counter; Counter=0}\
+														else{printf "%s: %d\n", Previousdate,Counter;Counter=0}}}}\
+					END {printf "%s: %d\n", Thisdate,Counter+1;\
+						if (AVArCounter != 0){printf "None: %d\n", AVArCounter}}') 
+	echo "$VALIDATED"
+}
+#only change in sorting range and in argument + do not print if CZ is relevant
+countries(){
+	VALIDATED=$(echo "$VALIDATED" | sort -t ',' -k 8,8 | awk -F ','  -vThisdate="0" -vPreviousdate="0" -vCounter="0" \
+				'{	if (NR <=1 ) {Thisdate=$8} \
+					else {Previousdate=Thisdate; Thisdate=$8; Counter++; \
+						if (Previousdate != Thisdate) {if (Previousdate == "" || Previousdate =="CZ") \
+														{Counter=0}\
+														else{printf "%s: %d\n", Previousdate,Counter;Counter=0}}}}\
+					END {if(Thisdate != "CZ") {printf "%s: %d\n", Thisdate, ++Counter}}') 
+	echo "$VALIDATED"
+
+}
+#sort range to district argument
+districts(){
+	VALIDATED=$(echo "$VALIDATED" | sort -t ',' -k 6,6 | awk -F ','  -vThisdate="0" -vPreviousdate="0" -vCounter="0" \
+				'{	if (NR <=1 ) {Thisdate=$6} \
+					else {Previousdate=Thisdate; Thisdate=$6; Counter++; \
+						if (Previousdate != Thisdate) {if (Previousdate == "" || Previousdate =="CZ") \
+														{Counter=0}\
+														else{printf "%s: %d\n", Previousdate,Counter;Counter=0}}}}\
+					END {if(Thisdate != "CZ") {printf "%s: %d\n", Thisdate, ++Counter}}') 
+	echo "$VALIDATED"
+}
+#sort range to region argument
+regions(){
+	VALIDATED=$(echo "$VALIDATED" | sort -t ',' -k 5,5 | awk -F ','  -vThisdate="0" -vPreviousdate="0" -vCounter="0" \
+				'{	if (NR <=1 ) {Thisdate=$5} \
+					else {Previousdate=Thisdate; Thisdate=$5; Counter++; \
+						if (Previousdate != Thisdate) {if (Previousdate == "" || Previousdate =="CZ") \
+														{Counter=0}\
+														else{printf "%s: %d\n", Previousdate,Counter;Counter=0}}}}\
+					END {if(Thisdate != "CZ") {printf "%s: %d\n", Thisdate, ++Counter}}') 
+	echo "$VALIDATED"
+}
+
+###############
+###VARIABLES###
+###############
+COMMAND=""
+LOGS=""
+FILTERS="GENDER=""
+AFTER_DATETIME=""
+BEFORE_DATETIME=""
+GRAPH=""
+
+while [ "$#" -gt 0 ]; do
+	case "$1" in 
+	infected | merge | gender | age | daily | monthly | yearly | countries | districts | regions )
+		COMMAND="$1"
+		shift
+		;;
+
+	-h)print_help;;
+
+	-g) FILTERS="$1"
+		GENDER="$2"
+ 		shift
+ 		shift
+ 		;;
+ 	-a) FILTERS="$1"; AFTER_DATETIME="$2" ;shift ;shift;;
+
+	-b) FILTERS="$1"; BEFORE_DATETIME="$2" ;shift ;shift;;
+
+	-s) FILTERS="$1"; GRAPH="$2" ; shift ;shift;;
+	
+	 *)#file cases, unzips if needs to
+		if [ "${1##*.}" = "csv" ] ;then
+      		LOGS="${LOGS}$(cat "$1" )
+      		"
+      		validate_logs
+      		shift
+    	elif [ "${1##*.}" = "gz" ] ;then
+      		LOGS="${LOGS}$(gzip -d -c "$1" )
+		"
+      		validate_logs
+      		shift
+    	elif [ "${1##*.}" = "bz2" ] ;then
+      		LOGS="${LOGS}$(bzip2 -d -c "$1" )
+      		"
+      		validate_logs
+      		shift
+      	else 
+      		echoerr "invalid argument" ;exit 1
+      	fi
+
+ 	esac
+done
+
+
+INFILE=0
+#input from stdin
+if [ -z "$LOGS" ] ;then
+	LOGS=${LOGS}$(cat - )
+	validate_logs
+	INFILE=1
+fi
+
+#filter separator
+if [ "$FILTERS" = "-g" ];then
+		if [ "$GENDER" = "M" ] ;then
+				gender_case_man
+
+		elif [ "$GENDER" = "Z" ];
+			then
+				gender_case_woman
+		else
+			echoerr "wrong argument" ;exit 1
+		fi
+fi
+if [ "$FILTERS" = "-a" ]; then
+	after_date
+elif [ "$FILTERS" = "-b" ]; then
+	before_date
+elif [ "$FILTERS" = "-s" ]; then
+	graphs
+fi
+
+
+#command separator
+if [ "$COMMAND" = "infected" ];then
+	infected
+elif [ "$COMMAND" = "merge" ];then
+	merge
+elif [ "$COMMAND" = "gender" ];then
+	gender
+elif [ "$COMMAND" = "age" ];then
+	age
+elif [ "$COMMAND" = "daily" ];then
+	daily
+elif [ "$COMMAND" = "monthly" ];then
+	monthly
+elif [ "$COMMAND" = "yearly" ];then
+	yearly
+elif [ "$COMMAND" = "countries" ];then
+	countries
+elif [ "$COMMAND" = "districts" ];then
+	districts
+elif [ "$COMMAND" = "regions" ];then
+	regions
+fi
+
+#print file without commands (merged)
+if [ "$COMMAND" = "" -a -n "$VALIDATED" ]; then
+	echo "$head"
+	echo "$VALIDATED"
+#input file print without command
+elif [ "$INFILE" = 1 ]; then
+	echo "$head"
+	echo "$VALIDATED"
+fi
